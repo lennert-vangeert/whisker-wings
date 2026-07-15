@@ -38,6 +38,24 @@ const CAMERA_FOV_BASE = 45;
 const CAMERA_FOV_MAX_ADD = 25; // how many degrees FOV can increase at full turbo
 const CAMERA_FOV_SMOOTHNESS = 8.0; // larger = faster interpolation
 
+export const SPAWN_POSITION = [0, 3, 7];
+
+/**
+ * Returns the plane to spawn with zero velocity and turbo.
+ * The axes, velocities and planePosition all live at module scope and survive
+ * unmount, so a new run has to reset them explicitly.
+ */
+export function resetFlight(x, y, z, planePosition) {
+  jawVelocity = 0;
+  pitchVelocity = 0;
+  yawVelocity = 0;
+  turbo = 0;
+  x.set(1, 0, 0);
+  y.set(0, 1, 0);
+  z.set(0, 0, 1);
+  planePosition.set(...SPAWN_POSITION);
+}
+
 export function updatePlaneAxis(
   x,
   y,
@@ -90,14 +108,7 @@ export function updatePlaneAxis(
   }
 
   if (controls["r"] || reset) {
-    jawVelocity = 0;
-    pitchVelocity = 0;
-    yawVelocity = 0;
-    turbo = 0;
-    x.set(1, 0, 0);
-    y.set(0, 1, 0);
-    z.set(0, 0, 1);
-    planePosition.set(0, 3, 7);
+    resetFlight(x, y, z, planePosition);
   }
 
   // apply rotations using velocities (radians/sec) scaled by delta

@@ -3,6 +3,12 @@ import { useGLTF } from "@react-three/drei";
 import { RigidBody } from "@react-three/rapier";
 import useGame from "../stores/useGame";
 
+const LANDSCAPE_URL = "./models/landscape/landscape.gltf";
+
+// Warms the cache while the player is still on the menu — this module is imported
+// by Experience.jsx at boot, but Landscape itself only mounts once the run starts.
+useGLTF.preload(LANDSCAPE_URL);
+
 const Landscape = () => {
   const phase = useGame((state) => state.phase);
   const failed = useGame((state) => state.failed);
@@ -10,7 +16,7 @@ const Landscape = () => {
 
   const collissionSound = new Audio("/audio/hit.mp3");
 
-  const landscape = useGLTF("./models/landscape/landscape.gltf");
+  const landscape = useGLTF(LANDSCAPE_URL);
   useEffect(() => {
     landscape.scene.traverse((child) => {
       if (child.isMesh) {

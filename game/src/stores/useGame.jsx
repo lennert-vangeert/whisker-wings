@@ -14,6 +14,7 @@ export default create(
       crashed: false,
       beaconsOn: false,
       flewOutOfMap: false,
+      outOfBounds: false,
       ringLocations: [
         // x, y, z, rotY
         [4, -10, -68, 0],
@@ -39,14 +40,20 @@ export default create(
           if (state.phase === "ready") {
             return {
               phase: "playing",
-              startTime: Date.now(),
+              // Stamped by beginRun() once the world has loaded and the plane
+              // starts moving, so loading time isn't counted as run time.
+              startTime: 0,
               score: 0,
               flewOutOfMap: false,
+              outOfBounds: false,
             };
           }
 
           return {};
         });
+      },
+      beginRun: () => {
+        set({ startTime: Date.now() });
       },
       restart: () => {
         console.log("restart");
@@ -74,7 +81,12 @@ export default create(
         }, 10);
       },
       ready: () => {
-        set({ phase: "ready", menuPhase: "main", crashed: false });
+        set({
+          phase: "ready",
+          menuPhase: "main",
+          crashed: false,
+          outOfBounds: false,
+        });
       },
       failed: () => {
         setTimeout(() => {
@@ -133,6 +145,11 @@ export default create(
       setFlewOutOfMapOn: () => {
         set(() => {
           return { flewOutOfMap: true };
+        });
+      },
+      setOutOfBounds: (value) => {
+        set(() => {
+          return { outOfBounds: value };
         });
       },
     };

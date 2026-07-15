@@ -6,7 +6,6 @@ import Landscape from "./objects/Landscape";
 import Lake from "./objects/Lake";
 import MenuPlane from "./objects/MenuPlane";
 import useGame from "./stores/useGame";
-import DeadZones from "./objects/DeadZones";
 
 export default function Experience() {
   const ringLocations = useGame((state) => state.ringLocations);
@@ -30,9 +29,8 @@ export default function Experience() {
       <Physics gravity={[0, -9.81, 0]}>
         {phase === "playing" && (
           <>
-          <DeadZones />
             <Plane />
-   
+
             {ringLocations.map(([x, y, z, rotY], index) => (
               <Ring
                 key={index}

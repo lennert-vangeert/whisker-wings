@@ -3,21 +3,23 @@ import { extend, useThree, useLoader, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 import { Water } from "three/examples/jsm/objects/Water.js";
-import { useControls } from "leva";
-import { RigidBody } from "@react-three/rapier";
+import { LAKE_POSITION, LAKE_SIZE } from "../lakeConfig";
 
 extend({ Water });
+
+const WATER_NORMALS_URL = "./textures/waternormals.jpg";
+
+// Warms the cache while the player is still on the menu — this module is imported
+// by Experience.jsx at boot, but Lake itself only mounts once the run starts.
+useLoader.preload(THREE.TextureLoader, WATER_NORMALS_URL);
 
 function Lake() {
   const ref = useRef();
   const gl = useThree((state) => state.gl);
-  const waterNormals = useLoader(
-    THREE.TextureLoader,
-    "https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/waternormals.jpg"
-  );
+  const waterNormals = useLoader(THREE.TextureLoader, WATER_NORMALS_URL);
 
   waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
-  const geom = useMemo(() => new THREE.PlaneGeometry(200, 200), []);
+  const geom = useMemo(() => new THREE.PlaneGeometry(LAKE_SIZE, LAKE_SIZE), []);
   const config = useMemo(
     () => ({
       textureWidth: 512,
@@ -37,14 +39,14 @@ function Lake() {
     (state, delta) => (ref.current.material.uniforms.time.value += delta / 10)
   );
   return (
-    // <RigidBody type="kinematicPosition">
-      <water
-        ref={ref}
-        args={[geom, config]}
-        rotation-x={-Math.PI / 2}
-        position={[-96, -48, -210]}
-      />
-    // </RigidBody>
+    // No collider: the plane's transform is authoritative, so drowning is detected
+    // by isSubmerged() in Plane.jsx rather than by physics.
+    <water
+      ref={ref}
+      args={[geom, config]}
+      rotation-x={-Math.PI / 2}
+      position={LAKE_POSITION}
+    />
   );
 }
 

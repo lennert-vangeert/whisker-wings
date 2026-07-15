@@ -6,9 +6,11 @@ import SoundOn from "../icons/SoundOn";
 import SoundOff from "../icons/SoundOff";
 import Credits from "./Credits";
 import EndTime from "./EndTime";
+import { boundsState } from "../worldBounds";
 
 const Interface = () => {
   const time = useRef();
+  const boundsCountdown = useRef();
   const start = useGame((state) => state.start);
   const ready = useGame((state) => state.ready);
   const phase = useGame((state) => state.phase);
@@ -26,7 +28,12 @@ const Interface = () => {
   const toggleBeacons = useGame((state) => state.toggleBeacons);
   const beaconsOn = useGame((state) => state.beaconsOn);
   const flewOutOfMap = useGame((state) => state.flewOutOfMap);
+  const outOfBounds = useGame((state) => state.outOfBounds);
+  const startTime = useGame((state) => state.startTime);
   const menuAudioRef = useRef(null);
+
+  // Start was clicked but the world hasn't finished loading yet.
+  const isLoadingRun = phase === "playing" && startTime === 0;
 
   const onchange = (e) => {
     setUserName(e.target.value);
@@ -71,7 +78,9 @@ const Interface = () => {
 
       let elapsedTime = 0;
 
-      if (state.phase === "playing") elapsedTime = Date.now() - state.startTime;
+      // startTime is 0 until beginRun() fires, i.e. while the world is still loading.
+      if (state.phase === "playing" && state.startTime !== 0)
+        elapsedTime = Date.now() - state.startTime;
       else if (state.phase === "ended")
         elapsedTime = state.endTime - state.startTime;
 
@@ -80,6 +89,10 @@ const Interface = () => {
 
       if (time.current) {
         time.current.textContent = elapsedTime;
+      }
+
+      if (boundsCountdown.current) {
+        boundsCountdown.current.textContent = boundsState.remaining.toFixed(1);
       }
     });
 
@@ -222,6 +235,19 @@ const Interface = () => {
           <div className="score">
             Score: {score}/{ringLocations.length}
           </div>
+          {outOfBounds && (
+            <div className="warning">
+              <span className="warning_text">⚠ Turn back</span>
+              <span className="warning_countdown" ref={boundsCountdown}>
+                3.0
+              </span>
+            </div>
+          )}
+          {isLoadingRun && (
+            <div className="loading">
+              <span className="loading_text">Loading map...</span>
+            </div>
+          )}
         </>
       )}
 

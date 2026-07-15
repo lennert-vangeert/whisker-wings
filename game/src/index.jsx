@@ -1,4 +1,5 @@
 import "./style.css";
+import { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { Canvas } from "@react-three/fiber";
 import Experience from "./Experience.jsx";
@@ -26,7 +27,12 @@ root.render(
         position: [-203, 115.5, 271],
       }}
     >
-      <Experience />
+      {/* Without this, a suspending model propagates out of <Canvas> to the DOM root,
+          where nothing catches it. Interface renders outside the Canvas and shows the
+          loading screen while this is suspended. */}
+      <Suspense fallback={null}>
+        <Experience />
+      </Suspense>
     </Canvas>
     <Interface />
   </KeyboardControls>
