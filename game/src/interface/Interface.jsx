@@ -24,6 +24,7 @@ const Interface = () => {
   const boundsCountdown = useRef();
   const airspeed = useRef();
   const stallWarning = useRef();
+  const turboBar = useRef();
   const menuAudioRef = useRef(null);
 
   const phase = useGame((state) => state.phase);
@@ -150,6 +151,17 @@ const Interface = () => {
           flightState.stalling
         );
       }
+
+      if (turboBar.current) {
+        // transform, not width — a width write every frame is a layout every frame.
+        turboBar.current.style.transform = `scaleX(${flightState.fuel})`;
+        // closest, not parentElement — the ref is on .turbo__fill, whose parent is
+        // the track. The empty styling hangs off .turbo, one level further up.
+        turboBar.current.closest(".turbo")?.classList.toggle(
+          "is_empty",
+          flightState.fuel <= 0.001
+        );
+      }
     });
 
     return unsubscribeEffect;
@@ -195,7 +207,7 @@ const Interface = () => {
   }, []);
 
   const hudRefs = useMemo(
-    () => ({ time, boundsCountdown, airspeed, stallWarning }),
+    () => ({ time, boundsCountdown, airspeed, stallWarning, turboBar }),
     []
   );
 

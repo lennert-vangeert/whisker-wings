@@ -8,15 +8,19 @@ import Lake from "./objects/Lake";
 import MenuPlane from "./objects/MenuPlane";
 import CrashBunny from "./objects/CrashBunny";
 import TurboEffects from "./objects/TurboEffects";
+import BeaconDirector from "./objects/BeaconDirector";
+import Jerrycan from "./objects/Jerrycan";
 import useGame from "./stores/useGame";
 
 export default function Experience() {
   const ringLocations = useGame((state) => state.ringLocations);
+  const jerrycanLocations = useGame((state) => state.jerrycanLocations);
   const phase = useGame((state) => state.phase);
   const runId = useGame((state) => state.runId);
   const score = useGame((state) => state.score);
   const end = useGame((state) => state.end);
   const effectsOn = useGame((state) => state.effectsOn);
+  const beaconsOn = useGame((state) => state.beaconsOn);
 
   // Ring sizes were computed inline in the map() below, so every Experience
   // re-render (it subscribes to phase) re-randomised all ten rings *and their hull
@@ -67,14 +71,26 @@ export default function Experience() {
             <Plane />
             {crashSequence && <CrashBunny />}
 
+            {/* Picks the nearest uncollected ring as the highlighted target.
+                Only worth running when the beacons are actually shown. */}
+            {beaconsOn && <BeaconDirector />}
+
             {ringLocations.map(([x, y, z, rotY], index) => (
               <Ring
                 key={index}
+                index={index}
                 position={[x, y, z]}
                 rotY={[0, rotY, 0]}
                 diameter={ringDiameters[index]}
               />
             ))}
+            {/* Boost fuel. Collection state is purely local to each can — nothing
+                outside needs to know which are gone, and the runId remount above
+                already resets them for a new run. */}
+            {jerrycanLocations.map(([x, y, z], index) => (
+              <Jerrycan key={index} index={index} position={[x, y, z]} />
+            ))}
+
             <Landscape />
             <Lake />
           </group>

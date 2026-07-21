@@ -47,16 +47,38 @@ const CL_FLOOR = 0.45; // fraction of CL_MAX kept in deep stall, so recovery alw
 const K_Y = 0.22; // side-force (vertical fin)
 
 // ---- drag ----
-const K_D0 = 0.0133; // parasitic
+// Parasitic drag sets the top speed, because top speed is just where thrust balances
+// drag: T_TURBO = (K_D0 + K_I*CL^2) * v^2. Lowered from 0.0133 to widen the boost —
+// 40 -> 48 u/s, i.e. 1.6x cruise up to 1.9x.
+//
+// This is the only lever available. Adding thrust instead would push T_TURBO past
+// G = 22, and the gravity comment above explains why T/W must stay under 1.
+// Side effect, and it's the point: less drag means the plane holds its energy
+// longer, so a boost carries well past the moment you release it.
+const K_D0 = 0.00925; // parasitic
 const K_I = 0.17; // induced (x CL^2)
 const K_SEP = 0.4; // post-stall flow separation
 const K_BETA = 0.3; // sideslip
 
 // ---- thrust ----
-const T0 = 9.0; // u/s^2 — pins level cruise at 25 u/s
-const T_TURBO = 21.5; // u/s^2 at turbo=1 — pins top speed at 40 u/s, T/W = 0.98
+// Cruise thrust has to come down with K_D0 or the lower drag would drag cruise speed
+// up with it — the boost is meant to widen, not to make everything faster.
+const T0 = 6.45; // u/s^2 — pins level cruise at 25 u/s
+const T_TURBO = 21.5; // u/s^2 at turbo=1 — pins top speed at 48 u/s, T/W = 0.98
 const TURBO_INC = 3.75; // turbo build per second while shift held
 const TURBO_DECAY = 2.5; // per second
+
+// ---- boost fuel ----
+// Turbo used to be free, so the optimal play was "hold shift forever" and the whole
+// thrust/drag trade collapsed into one setting. Fuel gates *boost only* — normal
+// flight never runs out of anything, you just lose the option to boost.
+const FUEL_BURN = 1 / 6; // per second while boosting — ~6s of continuous turbo
+const FUEL_REGEN = 1 / 25; // per second while not asking for boost
+const FUEL_PER_CAN = 0.4; // one jerrycan ~= 2.4s of turbo
+// Once empty, fuel has to climb back to here before shift bites again. Without this
+// latch the meter earns a sliver each frame and shift immediately spends it, which
+// strobes thrust, FOV and camera shake at frame rate.
+const FUEL_RESTART = 0.08;
 
 // ---- attitude ----
 // Sustained angular rates. The old model's MAX_VELOCITY clamp was dead code: the rate
@@ -87,6 +109,8 @@ let rollVelocity = 0;
 let pitchVelocity = 0;
 let yawVelocity = 0;
 export let turbo = 0;
+let fuel = 1;
+let fuelEmpty = false;
 
 // Mutable, read per-frame by the HUD via addEffect (same pattern as worldBounds.js's
 // boundsState) so airspeed/stall never trigger a React re-render.
@@ -97,10 +121,24 @@ export const flightState = {
   // zustand because the juice that consumes it (engine pitch, smoke rate, camera
   // shake, post-processing) all runs per frame and must not re-render React.
   turbo: 0,
+  // Boost fuel, 0..1. Same reasoning: the HUD gauge reads it every frame.
+  fuel: 1,
 };
 
+/**
+ * Top the boost meter up. Called by jerrycan pickups, which is the only thing that
+ * refills it faster than the passive trickle.
+ */
+export function refuel(amount = FUEL_PER_CAN) {
+  fuel = clamp(fuel + amount, 0, 1);
+  if (fuel >= FUEL_RESTART) fuelEmpty = false;
+  flightState.fuel = fuel;
+}
+
+export { FUEL_PER_CAN };
+
 /** Cruise speed, and roughly the turbo-pinned ceiling — the range juice maps over. */
-export const SPEED_RANGE = { min: V_SPAWN, max: 40 };
+export const SPEED_RANGE = { min: V_SPAWN, max: 48 };
 
 /**
  * Lift coefficient. Linear up to A_STALL, then a smoothstep decay to CL_FLOOR.
@@ -126,6 +164,8 @@ export function resetFlight(x, y, z, planePosition, velocity) {
   pitchVelocity = 0;
   yawVelocity = 0;
   turbo = 0;
+  fuel = 1;
+  fuelEmpty = false;
 
   x.set(1, 0, 0);
   y.set(0, 1, 0);
@@ -140,6 +180,7 @@ export function resetFlight(x, y, z, planePosition, velocity) {
   flightState.speed = V_SPAWN;
   flightState.stalling = false;
   flightState.turbo = 0;
+  flightState.fuel = 1;
 }
 
 // Scratch vectors — reused every substep to keep this allocation-free.
@@ -184,9 +225,27 @@ function integrate(x, y, z, planePosition, velocity, dt) {
   y.normalize();
   z.normalize();
 
-  // Turbo accumulator.
-  if (controls.shift) turbo += TURBO_INC * dt;
-  else turbo *= Math.exp(-TURBO_DECAY * dt);
+  // Turbo accumulator, now gated on fuel.
+  //
+  // Burn is binary on shift-held rather than proportional to `turbo`: the two barely
+  // differ numerically (turbo ramps in ~0.27s), but "holding boost drains the bar" is
+  // legible where "the release tail also drains it" is not. Running dry doesn't snap —
+  // shift just stops building, and the existing decay bleeds the speed off over ~1s.
+  const boosting = controls.shift && !fuelEmpty && fuel > 0;
+
+  if (boosting) {
+    turbo += TURBO_INC * dt;
+    fuel -= FUEL_BURN * dt;
+  } else {
+    turbo *= Math.exp(-TURBO_DECAY * dt);
+    // Gated on the key, not on `boosting` — holding a dead shift must not refill you.
+    if (!controls.shift) fuel += FUEL_REGEN * dt;
+  }
+
+  if (fuel <= 0) fuelEmpty = true;
+  else if (fuel >= FUEL_RESTART) fuelEmpty = false;
+
+  fuel = clamp(fuel, 0, 1);
   turbo = clamp(turbo, 0, 1);
 
   // 2. Forces.
@@ -237,6 +296,7 @@ function integrate(x, y, z, planePosition, velocity, dt) {
   flightState.speed = velocity.length();
   flightState.stalling = stalling;
   flightState.turbo = turbo;
+  flightState.fuel = fuel;
 }
 
 export function updatePlaneAxis(

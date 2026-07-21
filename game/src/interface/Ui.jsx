@@ -42,6 +42,10 @@ const CREDITS = [
     <a href='http://creativecommons.org/licenses/by/4.0/'>CC Attribution</a>.
   </>,
   <>
+    "Jerrycan minimal" by Jesse Ragos, licensed under{' '}
+    <a href='http://creativecommons.org/licenses/by/4.0/'>CC Attribution</a>.
+  </>,
+  <>
     Song: Dosi &amp; Aisake — Cruising [NCS Release], provided by{' '}
     <a href='http://ncs.io/Cruising'>NoCopyrightSounds</a>.
   </>,
@@ -288,6 +292,14 @@ const Ui = ({
                 25
               </span>
               <span className='airspeed__unit'>kn</span>
+            </div>
+
+            {/* Boost fuel. The fill is scaled from the render loop, never by React. */}
+            <div className='turbo'>
+              <span className='hud__label'>Boost</span>
+              <div className='turbo__track'>
+                <div className='turbo__fill' ref={hudRefs.turboBar} />
+              </div>
             </div>
           </div>
 

@@ -29,6 +29,9 @@ export default create(
       // silenced ring pickups and impacts. Defaults on.
       isSfxOn: readFlag("isSfxOn", true),
       score: 0,
+      // Which ring indices have been taken. `score` alone can't answer "which are
+      // left", which the beacon director needs to pick the nearest target.
+      collectedRings: [],
       crashed: false,
       beaconsOn: readFlag("beaconsOn", false),
       // Post-processing. The only setting with meaningful GPU cost, so it's opt-out.
@@ -47,6 +50,26 @@ export default create(
         [186, -26, -200, 1.7],
         [-202, 7, -214, 1.29],
         [-316, -42, -311, 0.17],
+      ],
+      // Boost fuel pickups, placed on the lines *between* rings so that boosting
+      // toward a target runs you past fuel. Not scored and not part of the win
+      // condition — see the check in Experience.jsx, which counts rings only.
+      // Each sits on the line between two rings, and every one was picked by
+      // raycasting the actual terrain collider rather than by eye — the obvious
+      // midpoints of the 5->6, 6->4 and 3->9 legs all turned out to be *inside* a
+      // hill, and those legs simply have no can rather than a floating-in-rock one.
+      // Clearance above ground is ~18-60 units at each.
+      jerrycanLocations: [
+        // x, y, z
+        [-20, -13, -126], // ring 0 -> 1
+        [-66, 14, -232], // 1 -> 2
+        [-52, 38, -398], // 2 -> 3
+        [0, -10, -494], // 3 -> 4
+        [95, -18, -134], // 0 -> 7
+        [236, -8, -191], // 7 -> 5
+        [278, 28, -290], // 5 -> 6
+        [-123, -7, -199], // 1 -> 8
+        [-259, -17, -262], // 8 -> 9
       ],
 
       /**
@@ -67,6 +90,7 @@ export default create(
               // starts moving, so loading time isn't counted as run time.
               startTime: 0,
               score: 0,
+              collectedRings: [],
               flewOutOfMap: false,
               outOfBounds: false,
             };
@@ -95,6 +119,7 @@ export default create(
           endTime: 0,
           playTime: 0,
           score: 0,
+          collectedRings: [],
           crashed: false,
           flewOutOfMap: false,
           outOfBounds: false,
@@ -134,6 +159,7 @@ export default create(
           // Reset the run record too. Leaving these stale is what made the old
           // playTime bug permanent rather than first-run-only.
           score: 0,
+          collectedRings: [],
           startTime: 0,
           endTime: 0,
           playTime: 0,
@@ -231,9 +257,18 @@ export default create(
       },
 
       // score
-      addScore: () => {
+      //
+      // Replaces the old addScore(): the beacon director needs to know *which*
+      // rings are gone to pick the nearest remaining one, and a bare counter can't
+      // answer that. Idempotent per ring, so a duplicate contact can't double-count.
+      collectRing: (index) => {
         set((state) => {
-          return { score: state.score + 1 };
+          if (state.collectedRings.includes(index)) return {};
+
+          return {
+            score: state.score + 1,
+            collectedRings: [...state.collectedRings, index],
+          };
         });
       },
       toggleEffects: () => {

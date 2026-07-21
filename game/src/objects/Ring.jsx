@@ -1,9 +1,9 @@
 import React, { useRef, useState } from "react";
 import { RigidBody } from "@react-three/rapier";
-import { Float } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import useGame from "../stores/useGame";
 import useSound from "../useSound";
+import BeaconShaft from "./BeaconShaft";
 
 // How long the collected ring stays on screen, popping and fading, before it goes.
 const POP_SECONDS = 0.25;
@@ -13,12 +13,12 @@ const POP_SCALE = 1.6;
 const SEMITONE = 2 ** (1 / 12);
 const MAX_COMBO_STEPS = 12;
 
-const Ring = ({ diameter, position, rotY }) => {
+const Ring = ({ index, diameter, position, rotY }) => {
   const [isVisible, setIsVisible] = useState(true);
   // Mirrors collectedRef for rendering. The ref is the latch (refs don't re-render,
   // so it can't be used to drive JSX); the state is what the beacon reads.
   const [collected, setCollected] = useState(false);
-  const addScore = useGame((state) => state.addScore);
+  const collectRing = useGame((state) => state.collectRing);
   const beaconsOn = useGame((state) => state.beaconsOn);
   const playCollect = useSound("/audio/collect.mp3", { volume: 0.5 });
 
@@ -27,6 +27,9 @@ const Ring = ({ diameter, position, rotY }) => {
   const collectedRef = useRef(false);
   const popRef = useRef(null);
   const popTimer = useRef(0);
+  // Drives the beacon down alongside the ring's pop. Previously the beacon was
+  // gated on `!collected`, so it blinked out a beat before the pop finished.
+  const beaconFadeRef = useRef(1);
 
   const onCollission = () => {
     if (collectedRef.current) return;
@@ -37,7 +40,7 @@ const Ring = ({ diameter, position, rotY }) => {
     const step = Math.min(useGame.getState().score, MAX_COMBO_STEPS);
     playCollect({ playbackRate: SEMITONE ** step });
 
-    addScore();
+    collectRing(index);
   };
 
   useFrame((state, delta) => {
@@ -49,6 +52,7 @@ const Ring = ({ diameter, position, rotY }) => {
     // Scale up and fade out, then remove.
     popRef.current.scale.setScalar(1 + (POP_SCALE - 1) * t);
     popRef.current.material.opacity = 1 - t;
+    beaconFadeRef.current = 1 - t;
 
     if (t >= 1) setIsVisible(false);
   });
@@ -74,24 +78,11 @@ const Ring = ({ diameter, position, rotY }) => {
         </mesh>
       </RigidBody>
 
-      {beaconsOn && !collected && (
-        <Float
-          position={[position[0], position[1] + 30, position[2]]}
-          speed={0.5}
-          rotationIntensity={0.2}
-          floatIntensity={0.2}
-        >
-          <group>
-            <mesh position={[0, 40, 0]}>
-              <coneGeometry args={[diameter * 0.5, 40, 4]} />
-              <meshStandardMaterial color="red" transparent opacity={0.3} />
-            </mesh>
-            <mesh rotation={[Math.PI, 0, 0]}>
-              <coneGeometry args={[diameter * 0.5, 40, 4]} />
-              <meshStandardMaterial color="red" transparent opacity={0.3} />
-            </mesh>
-          </group>
-        </Float>
+      {/* Size is fixed, not derived from `diameter` — beacons should be uniform, so
+          that any difference between them reads as "this one is your target"
+          rather than "this ring happens to be bigger". */}
+      {beaconsOn && (
+        <BeaconShaft index={index} position={position} fadeRef={beaconFadeRef} />
       )}
     </>
   );

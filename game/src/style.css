@@ -461,6 +461,45 @@ body,
   opacity: 0.6;
 }
 
+/* Boost fuel gauge. Same rule as .stall below: the empty-state animation lives on
+   .is_empty only, never on .turbo, or it can never be turned off. */
+.turbo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.turbo__track {
+  width: clamp(5rem, 11vw, 8rem);
+  height: 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+/* Scaled from the render loop. transform-origin is load-bearing — the default
+   centre origin would grow the bar out of both ends. */
+.turbo__fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  transform: scaleX(1);
+  will-change: transform;
+  background: linear-gradient(90deg, #38bdf8, #eafff8);
+}
+
+.turbo.is_empty .turbo__fill {
+  background: var(--color-danger);
+}
+
+.turbo.is_empty .hud__label {
+  opacity: 1;
+  color: var(--color-danger);
+  animation: pulse 0.8s infinite;
+}
+
 /* Toggled by the render loop via the is_stalling class. The animation must stay
    on .is_stalling and never on .stall, or the warning can't be dismissed. */
 .stall {
@@ -688,6 +727,7 @@ body,
   }
 
   .stall.is_stalling,
+  .turbo.is_empty .hud__label,
   .warning,
   .loading__text {
     animation: none;
