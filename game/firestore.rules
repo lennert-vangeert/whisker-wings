@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// Security rules for the Whisker Wings leaderboard.
+//   scores -> a public, append-only log of finished runs. Anyone may read the
+//             board; anyone may append one score; nothing can ever be edited or
+//             deleted.
+//
+// There is no auth here by design: the game has no accounts. That means a
+// determined player can still forge a time — which was equally true of the old
+// Express API, whose `key` header shipped in the client bundle. What the rules do
+// buy us is a guaranteed shape: no junk fields, no absurd times, no rewriting
+// somebody else's run.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Mirrors the document written by src/interface/useScoreSubmission.js.
+    // Keep in sync when the model changes.
+    function validScore(d) {
+      return d.keys().hasOnly(['userName', 'timeMs', 'createdAt'])
+             && d.userName is string
+             && d.userName.size() >= 1
+             && d.userName.size() <= 20
+             // An int, not a float: the client rounds before writing. Storing the
+             // time as a number is the whole point of the Firestore move — the old
+             // Mongo model typed it as a String and sorted lexicographically, so
+             // "10.55" ranked above "9.20".
+             && d.timeMs is int
+             && d.timeMs > 0
+             && d.timeMs < 3600000
+             && d.createdAt == request.time;
+    }
+
+    match /scores/{scoreId} {
+      allow read: if true;
+      allow create: if validScore(request.resource.data);
+      allow update, delete: if false;
+    }
+  }
+}

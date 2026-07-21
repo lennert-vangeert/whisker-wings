@@ -1,269 +1,275 @@
-import React, { useEffect, useRef, useState } from "react";
-import useGame from "../stores/useGame";
+// Interface.jsx
+// Container for the UI. Owns everything stateful — store subscriptions, the
+// per-frame HUD loop, the music crossfade, pause keybindings and the two network
+// calls — and renders nothing itself but <Ui>, which is purely presentational.
+
+import React, { useEffect, useMemo, useRef } from "react";
 import { addEffect } from "@react-three/fiber";
-import Leaderboard from "./Leaderboard";
-import SoundOn from "../icons/SoundOn";
-import SoundOff from "../icons/SoundOff";
-import Credits from "./Credits";
-import EndTime from "./EndTime";
+import useGame from "../stores/useGame";
 import { boundsState } from "../worldBounds";
+import { flightState } from "../flightControls";
+import Ui from "./Ui";
+import useLeaderboard from "./useLeaderboard";
+import useScoreSubmission from "./useScoreSubmission";
+
+// The one music track serves both contexts: full level on the menu, pulled back
+// during a run so the engine and SFX sit on top of it.
+const MENU_VOLUME = 0.5;
+const GAMEPLAY_VOLUME = 0.18;
+const FADE_MS = 600;
 
 const Interface = () => {
+  // HUD nodes written directly from the render loop — see the addEffect block below.
   const time = useRef();
   const boundsCountdown = useRef();
-  const start = useGame((state) => state.start);
-  const ready = useGame((state) => state.ready);
+  const airspeed = useRef();
+  const stallWarning = useRef();
+  const menuAudioRef = useRef(null);
+
   const phase = useGame((state) => state.phase);
   const menuPhase = useGame((state) => state.menuPhase);
+  const paused = useGame((state) => state.paused);
+  const startTime = useGame((state) => state.startTime);
+  const playTime = useGame((state) => state.playTime);
+  const score = useGame((state) => state.score);
+  const ringLocations = useGame((state) => state.ringLocations);
+  const userName = useGame((state) => state.userName);
+  const isMusicOn = useGame((state) => state.isMusicOn);
+  const isSfxOn = useGame((state) => state.isSfxOn);
+  const effectsOn = useGame((state) => state.effectsOn);
+  const beaconsOn = useGame((state) => state.beaconsOn);
+  const flewOutOfMap = useGame((state) => state.flewOutOfMap);
+  const outOfBounds = useGame((state) => state.outOfBounds);
+
+  const start = useGame((state) => state.start);
+  const ready = useGame((state) => state.ready);
+  const restart = useGame((state) => state.restart);
+  const setPaused = useGame((state) => state.setPaused);
+  const setUserName = useGame((state) => state.setUserName);
+  const setMusicOn = useGame((state) => state.setMusicOn);
+  const setMusicOff = useGame((state) => state.setMusicOff);
+  const toggleSfx = useGame((state) => state.toggleSfx);
+  const toggleEffects = useGame((state) => state.toggleEffects);
+  const toggleBeacons = useGame((state) => state.toggleBeacons);
   const menuMain = useGame((state) => state.menuMain);
   const menuSettings = useGame((state) => state.menuSettings);
   const menuLeaderboards = useGame((state) => state.menuLeaderboards);
   const menuCredits = useGame((state) => state.menuCredits);
   const menuControls = useGame((state) => state.menuControls);
-  const setUserName = useGame((state) => state.setUserName);
-  const userName = useGame((state) => state.userName);
-  const isMusicOn = useGame((state) => state.isMusicOn);
-  const score = useGame((state) => state.score);
-  const ringLocations = useGame((state) => state.ringLocations);
-  const toggleBeacons = useGame((state) => state.toggleBeacons);
-  const beaconsOn = useGame((state) => state.beaconsOn);
-  const flewOutOfMap = useGame((state) => state.flewOutOfMap);
-  const outOfBounds = useGame((state) => state.outOfBounds);
-  const startTime = useGame((state) => state.startTime);
-  const menuAudioRef = useRef(null);
 
   // Start was clicked but the world hasn't finished loading yet.
   const isLoadingRun = phase === "playing" && startTime === 0;
 
-  const onchange = (e) => {
-    setUserName(e.target.value);
-    localStorage.setItem("userName", e.target.value);
-  };
+  const leaderboard = useLeaderboard(
+    phase === "ready" && menuPhase === "leaderboards"
+  );
+  const submission = useScoreSubmission(phase === "ended", playTime, userName);
 
-  const onStart = () => {
-    if (userName === "") {
-      alert("Please enter a name");
-      return;
-    }
-    start();
-  };
-
+  // Create the track once, for the lifetime of the app.
   useEffect(() => {
-    // Create the Audio object only once
-    if (!menuAudioRef.current) {
-      const menuAudio = new Audio("/audio/song-menu.mp3");
-      menuAudio.loop = true;
-      menuAudio.volume = 0.5;
-      menuAudioRef.current = menuAudio;
-    }
+    const menuAudio = new Audio("/audio/song-menu.mp3");
+    menuAudio.loop = true;
+    menuAudio.volume = MENU_VOLUME;
+    menuAudioRef.current = menuAudio;
 
-    const menuAudio = menuAudioRef.current;
-
-    if (isMusicOn) {
-      menuAudio.play();
-    } else {
-      menuAudio.pause();
-    }
-
-    // Cleanup on component unmount (optional)
     return () => {
       menuAudio.pause();
-      menuAudio.currentTime = 0; // Reset playback position
+      menuAudioRef.current = null;
     };
+  }, []);
+
+  // Play/pause and volume, driven by the mute flag and the phase.
+  //
+  // This used to be a single effect with deps [isMusicOn, phase]: on every phase
+  // change its cleanup paused the track and reset currentTime, then the effect body
+  // immediately replayed it — so the menu song restarted from zero constantly and
+  // carried on playing straight through the run. Splitting creation from control
+  // means the track survives phase changes, and the run gets its own quieter mix.
+  useEffect(() => {
+    const menuAudio = menuAudioRef.current;
+    if (!menuAudio) return;
+
+    if (!isMusicOn) {
+      menuAudio.pause();
+      return;
+    }
+
+    const target = phase === "ready" ? MENU_VOLUME : GAMEPLAY_VOLUME;
+    menuAudio.play().catch(() => {});
+
+    // Short crossfade so the level change isn't a step.
+    const from = menuAudio.volume;
+    const startedAt = performance.now();
+    const id = setInterval(() => {
+      const t = Math.min((performance.now() - startedAt) / FADE_MS, 1);
+      menuAudio.volume = from + (target - from) * t;
+
+      if (t >= 1) clearInterval(id);
+    }, 50);
+
+    return () => clearInterval(id);
   }, [isMusicOn, phase]);
 
+  // The HUD readouts are written straight into the DOM from the r3f render loop,
+  // deliberately bypassing React — they change every frame and must not re-render
+  // the tree. State is read via getState() rather than subscribed selectors for the
+  // same reason. Every write is null-guarded because these nodes unmount on phase
+  // change.
   useEffect(() => {
     const unsubscribeEffect = addEffect(() => {
       const state = useGame.getState();
 
-      let elapsedTime = 0;
-
       // startTime is 0 until beginRun() fires, i.e. while the world is still loading.
-      if (state.phase === "playing" && state.startTime !== 0)
-        elapsedTime = Date.now() - state.startTime;
-      else if (state.phase === "ended")
-        elapsedTime = state.endTime - state.startTime;
-
-      elapsedTime /= 1000;
-      elapsedTime = elapsedTime.toFixed(2);
-
-      if (time.current) {
-        time.current.textContent = elapsedTime;
+      // Skipped while paused: startTime isn't rebased until resume, so continuing to
+      // write would let the display run on and then jump backwards.
+      if (
+        time.current &&
+        state.phase === "playing" &&
+        !state.paused &&
+        state.startTime !== 0
+      ) {
+        time.current.textContent = (
+          (Date.now() - state.startTime) /
+          1000
+        ).toFixed(2);
       }
 
       if (boundsCountdown.current) {
         boundsCountdown.current.textContent = boundsState.remaining.toFixed(1);
       }
+
+      if (airspeed.current) {
+        airspeed.current.textContent = Math.round(flightState.speed);
+      }
+
+      if (stallWarning.current) {
+        // Idempotent: a toggle that doesn't change the class list doesn't touch the
+        // DOM. The animation lives on .is_stalling, never .stall.
+        stallWarning.current.classList.toggle(
+          "is_stalling",
+          flightState.stalling
+        );
+      }
     });
 
-    return () => {
-      unsubscribeEffect();
-    };
+    return unsubscribeEffect;
   }, []);
 
   useEffect(() => {
     setUserName(localStorage.getItem("userName") || "Player");
   }, []);
 
-  const onChange = (e) => {
-    toggleBeacons();
-  };
+  // Pause on Escape/P, and force it when the tab loses focus.
+  //
+  // flightControls.js clamps its delta on tab restore (MAX_DELTA), which mitigated
+  // the symptom of tabbing away mid-flight but still let the run clock keep counting
+  // wall-clock time you weren't playing. setPaused rebases startTime on resume.
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const key = e.key.toLowerCase();
+      if (key !== "escape" && key !== "p") return;
+
+      const state = useGame.getState();
+      if (state.phase !== "playing") return;
+
+      state.setPaused(!state.paused);
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) useGame.getState().setPaused(true);
+    };
+
+    // Separate from onVisibility: document.hidden is false on blur (the tab is still
+    // visible, it just isn't focused), so reusing that handler would never fire.
+    const onBlur = () => useGame.getState().setPaused(true);
+
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  const hudRefs = useMemo(
+    () => ({ time, boundsCountdown, airspeed, stallWarning }),
+    []
+  );
+
+  const on = useMemo(() => {
+    const navigate = (target) =>
+      ({
+        main: menuMain,
+        settings: menuSettings,
+        leaderboards: menuLeaderboards,
+        credits: menuCredits,
+        controls: menuControls,
+      }[target]?.());
+
+    return {
+      start: () => {
+        if (!useGame.getState().userName.trim()) {
+          alert("Please enter a name");
+          return;
+        }
+        start();
+      },
+      changeUserName: (value) => {
+        setUserName(value);
+        localStorage.setItem("userName", value);
+      },
+      navigate,
+      resume: () => setPaused(false),
+      restart,
+      mainMenu: ready,
+      toggleMusic: () =>
+        useGame.getState().isMusicOn ? setMusicOff() : setMusicOn(),
+      toggleSfx,
+      toggleEffects,
+      toggleBeacons,
+    };
+  }, [
+    start,
+    setUserName,
+    setPaused,
+    restart,
+    ready,
+    setMusicOn,
+    setMusicOff,
+    toggleSfx,
+    toggleEffects,
+    toggleBeacons,
+    menuMain,
+    menuSettings,
+    menuLeaderboards,
+    menuCredits,
+    menuControls,
+  ]);
 
   return (
-    <main className="interface">
-      {isMusicOn ? <SoundOn /> : <SoundOff />}
-
-      {phase === "ready" && menuPhase === "main" && (
-        <div className="button_container">
-          <h1 className="title">Whisker Wings</h1>
-          <label className="label" htmlFor="name">
-            Username
-            <input
-              onChange={onchange}
-              type="text"
-              id="name"
-              placeholder="Enter your name"
-              className="name_input"
-              value={userName}
-            />
-          </label>
-          <div className="main_button" onClick={onStart}>
-            Start
-          </div>
-          <div className="main_button" onClick={menuSettings}>
-            Settings
-          </div>
-          <div className="main_button" onClick={menuLeaderboards}>
-            Leaderboard
-          </div>
-        </div>
-      )}
-      {phase === "ready" && menuPhase === "settings" && (
-        <div className="button_container">
-          <h1 className="title">Settings</h1>
-          <div className="main_button" onClick={menuMain}>
-            back
-          </div>
-          <div className="main_button" onClick={menuCredits}>
-            credits
-          </div>
-          <div className="main_button" onClick={menuControls}>
-            controls
-          </div>
-          <div className="setting_container">
-            <h3 className="subtitle">Turn on beacons</h3>
-            <input
-              onChange={onChange}
-              name="beacons"
-              className="checkbox"
-              type="checkbox"
-              checked={beaconsOn}
-            />
-          </div>
-        </div>
-      )}
-
-      {phase === "ready" && menuPhase === "controls" && (
-        <>
-          <div className="button_container">
-            <h1 className="title">Controls</h1>
-            <div className="main_button" onClick={menuMain}>
-              back
-            </div>
-          </div>
-          <div className="right_container">
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">W / Z / ↑</span>
-              <span className="leaderboard_name">Move down</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">S / ↓</span>
-              <span className="leaderboard_name">Move up</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">A / Q</span>
-              <span className="leaderboard_name">Pitch left</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">D</span>
-              <span className="leaderboard_name">Pitch right</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">←</span>
-              <span className="leaderboard_name">Yaw left</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">→</span>
-              <span className="leaderboard_name">Yaw Right</span>
-            </div>
-            <div className="leaderboard_item">
-              <span className="leaderboard_rank">Lshift</span>
-              <span className="leaderboard_name">Boost</span>
-            </div>
-          </div>
-        </>
-      )}
-      {phase === "ready" && menuPhase === "leaderboards" && (
-        <>
-          <div className="button_container">
-            <div className="main_button" onClick={menuMain}>
-              back
-            </div>
-          </div>
-          <Leaderboard />
-        </>
-      )}
-
-      {phase === "ready" && menuPhase === "credits" && (
-        <>
-          <div className="button_container">
-            <h1 className="title">Credits</h1>
-            <div className="main_button" onClick={menuMain}>
-              back
-            </div>
-          </div>
-          <Credits />
-        </>
-      )}
-      {/* Time */}
-
-      {phase === "playing" && (
-        <>
-          <div className="time" ref={time}>
-            0.00
-          </div>
-          <div className="score">
-            Score: {score}/{ringLocations.length}
-          </div>
-          {outOfBounds && (
-            <div className="warning">
-              <span className="warning_text">⚠ Turn back</span>
-              <span className="warning_countdown" ref={boundsCountdown}>
-                3.0
-              </span>
-            </div>
-          )}
-          {isLoadingRun && (
-            <div className="loading">
-              <span className="loading_text">Loading map...</span>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Restart */}
-      {phase === "failed" && (
-        <div className="button_container">
-          <h1 className="title">
-            {flewOutOfMap ? "Try staying in the map" : "You crashed :/"}
-          </h1>
-          <div className="main_button" onClick={ready}>
-            Main menu
-          </div>
-        </div>
-      )}
-      {phase === "ended" && <EndTime time={time.current.textContent} />}
-    </main>
+    <Ui
+      phase={phase}
+      menuPhase={menuPhase}
+      paused={paused}
+      isLoadingRun={isLoadingRun}
+      userName={userName}
+      score={score}
+      ringCount={ringLocations.length}
+      playTime={playTime}
+      flewOutOfMap={flewOutOfMap}
+      outOfBounds={outOfBounds}
+      isMusicOn={isMusicOn}
+      isSfxOn={isSfxOn}
+      effectsOn={effectsOn}
+      beaconsOn={beaconsOn}
+      leaderboard={leaderboard}
+      submission={submission}
+      hudRefs={hudRefs}
+      on={on}
+    />
   );
 };
 

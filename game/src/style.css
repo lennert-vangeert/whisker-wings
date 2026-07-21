@@ -1,7 +1,57 @@
+/* ==========================================================================
+   Whisker Wings UI
+   --------------------------------------------------------------------------
+   The whole interface is one full-screen CSS grid overlaying the canvas. This
+   replaces the previous approach of positioning every element absolutely by
+   percentage with hand-tuned magic numbers (`.right_container { right: -10% }`,
+   `.stall { bottom: 7rem }`), which only lined up at one viewport size and had
+   no responsive rules at all.
+
+   Layout regions:
+
+     +---------------------------+
+     | top-left      top-right   |   HUD corners while playing
+     |                           |
+     |               [ panel ]   |   leaderboard / controls / credits
+     |                           |
+     | lower-third   bottom-right|   title + nav, sound toggle
+     +---------------------------+
+
+   Sizing is fluid via clamp() with a single breakpoint at 768px, below which
+   the right panel becomes a full-width sheet.
+   ========================================================================== */
+
 :root {
   --color-primary: #363227;
   --color-secondary: #000;
-  --color-semi-transparent: hsla(0, 0%, 100%, 0.333);
+  --color-ink-soft: #6b6455;
+  --color-danger: #c8433a;
+
+  --surface: hsla(0, 0%, 100%, 0.62);
+  --surface-strong: hsla(0, 0%, 100%, 0.82);
+  --surface-dark: hsla(40, 12%, 8%, 0.62);
+  --border: hsla(44, 18%, 20%, 0.28);
+
+  /* Fluid scale. Every size in the UI comes from one of these. */
+  --fs-display: clamp(2.2rem, 5.2vw, 4.5rem);
+  --fs-title: clamp(1.5rem, 2.6vw, 2.25rem);
+  --fs-body: clamp(0.95rem, 1.2vw, 1.125rem);
+  --fs-hud: clamp(1.75rem, 3.4vw, 3rem);
+  --fs-hud-label: clamp(0.7rem, 0.9vw, 0.85rem);
+
+  --space-1: 0.35rem;
+  --space-2: 0.65rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2.25rem;
+
+  --radius: 0.6rem;
+  --edge: clamp(1rem, 3vw, 3rem);
+  --blur: blur(10px);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 html,
@@ -12,293 +62,634 @@ body,
   left: 0;
   width: 100%;
   height: 100%;
+  margin: 0;
   background: ivory;
 }
 
-/* interface */
-.interface {
+/* ============================================================ grid container */
+
+.ui {
   position: fixed;
-  top: 0;
-  left: 0;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "top-left     top-right"
+    "middle       panel"
+    "bottom-left  bottom-right";
+  gap: var(--space-3);
+  padding: var(--edge);
+
+  font-family: "Roboto", system-ui, sans-serif;
+  color: var(--color-primary);
+
+  /* Clicks fall through to the canvas; interactive children opt back in below. */
+  pointer-events: none;
+}
+
+/* One rule instead of scattering pointer-events across a dozen selectors. */
+.ui button,
+.ui input,
+.ui a,
+.ui label,
+.panel {
+  pointer-events: auto;
+}
+
+/* ================================================================== controls */
+
+.btn {
+  font: inherit;
+  font-size: var(--fs-body);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-primary);
+  background: var(--surface);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--color-primary);
+  color: ivory;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible {
+  outline: 3px solid var(--color-secondary);
+  outline-offset: 2px;
+}
+
+.btn--primary {
+  background: var(--color-primary);
+  color: ivory;
+}
+
+.btn--primary:hover {
+  background: var(--color-secondary);
+}
+
+.icon_button {
+  display: grid;
+  place-items: center;
+  width: clamp(2.5rem, 4vw, 3.25rem);
+  aspect-ratio: 1;
+  padding: 0;
+  color: var(--color-primary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+
+.icon_button:hover {
+  opacity: 1;
+}
+
+/* Sized by its container rather than the hardcoded pixel width/height the old
+   SoundOn/SoundOff SVGs carried, and inherits colour via currentColor. */
+.icon {
   width: 100%;
   height: 100%;
-  pointer-events: none;
-  z-index: 100;
-  /* roboto */
-  font-family: "Roboto", sans-serif;
-}
-.time {
-  position: absolute;
-  top: 0;
-  right: 0;
-  padding: 3rem;
-  font-size: 3rem;
-  color: var(--color-primary);
 }
 
-.restart {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 1rem 2rem;
-  background: transparent;
-  color: var(--color-primary);
-  font-size: 2rem;
-  border: 2px solid var(--color-primary);
-  pointer-events: auto;
-  cursor: pointer;
-  transition: 0.15s ease-in-out all;
-  text-align: center;
-}
-.button_container {
-  position: absolute;
-  top: 65%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  justify-content: space-between;
-  flex-direction: column;
-  gap: 1rem;
-}
-.main_button {
-  padding: 1rem 2rem;
-  background: transparent;
-  color: var(--color-primary);
-  font-size: 2rem;
-  border: 2px solid var(--color-primary);
-  pointer-events: auto;
-  cursor: pointer;
-  transition: 0.15s ease-in-out all;
-  text-align: center;
-}
+/* ============================================================== lower third */
 
-.main_button:hover {
-  background: var(--color-primary);
-  color: #fff;
-  transition: 0.15s ease-in-out all;
-}
-
-.title {
-  padding: 1rem 2rem;
-  color: var(--color-primary);
-  font-size: 3rem;
-  transition: 0.15s ease-in-out all;
-  text-align: center;
-}
-.subtitle {
-  padding: 1rem 2rem;
-  color: var(--color-primary);
-  font-size: 2rem;
-  pointer-events: auto;
-  transition: 0.15s ease-in-out all;
-  text-align: center;
-}
-.checkbox {
-  appearance: none;
-  pointer-events: auto; /* Allow pointer events */
-  width: 1.5rem;
-  height: 1.5rem;
-  background: transparent;
-  border: 2px solid var(--color-primary);
-  border-radius: 0.25rem;
-  cursor: pointer;
-  display: inline-block;
-  position: relative;
-  transition: background 0.15s ease-in-out, transform 0.15s ease-in-out;
-}
-
-.checkbox:checked {
-  background: var(--color-primary);
-}
-
-.checkbox:checked::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0.75rem;
-  height: 0.75rem;
-  background: white;
-  transform: translate(-50%, -50%);
-  border-radius: 0.125rem;
-}
-
-.checkbox:hover {
-  transform: scale(1.1);
-  transition: 0.15s ease-in-out all;
-}
-.setting_container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.right_container {
-  position: absolute;
-  top: 50%;
-  right: -10%;
-  transform: translate(-50%, -50%);
+.ui__lower {
+  grid-area: bottom-left;
+  align-self: end;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-  padding: 2rem;
-  background: var(--color-semi-transparent);
-  border: 2px solid var(--color-primary);
-  width: 30%;
-  margin: 0 auto;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: min(30rem, 46vw);
 }
 
-.leaderboard_item {
+.brand {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  text-shadow: 0 2px 18px hsla(0, 0%, 100%, 0.65);
+}
+
+.nav {
   display: flex;
-  justify-content: space-between;
-  width: 100%;
-  padding: 1rem;
-  background: var(--color-semi-transparent);
-  border: 1px solid var(--color-primary);
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.leaderboard_rank,
-.leaderboard_name,
-.leaderboard_score {
-  font-size: 1.5rem;
-  color: var(--color-primary);
-}
-
-.label {
+.field {
   display: flex;
   flex-direction: column;
-  font-size: 1.5rem;
+  gap: var(--space-1);
+  font-size: var(--fs-body);
+}
+
+.field__label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.field__input {
+  font: inherit;
+  font-size: var(--fs-body);
+  padding: var(--space-2) var(--space-3);
   color: var(--color-primary);
-  margin-bottom: 1rem;
-}
-
-.name_input {
-  padding: 0.5rem;
-  font-size: 1.5rem;
+  background: var(--surface);
   border: 2px solid var(--color-primary);
-  background: transparent;
-  border-radius: 0.25rem;
-  margin-top: 0.5rem;
-  transition: border-color 0.15s ease-in-out;
-  pointer-events: auto;
+  border-radius: var(--radius);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
 }
 
-.name_input:focus {
+.field__input:focus {
   border-color: var(--color-secondary);
   outline: none;
 }
 
-.sound_icon {
-  position: absolute;
-  top: 0;
-  right: 0;
-  padding: 3rem;
-  font-size: 2rem;
-  color: var(--color-primary);
-  cursor: pointer;
-  pointer-events: auto;
-}
-.sound_icon_bottom {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  padding: 3rem;
-  font-size: 2rem;
-  color: var(--color-primary);
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   width: 100%;
 }
-.list a {
-  pointer-events: auto;
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-body);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
 }
 
-.list_item {
-  padding: 1rem;
-  background: var(--color-semi-transparent);
-  border: 1px solid var(--color-primary);
+.toggle__input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin: 0;
+  border: 2px solid var(--color-primary);
   border-radius: 0.25rem;
-  margin-bottom: 1rem;
-  font-size: 1.5rem;
-  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-.list_item a {
+.toggle__input:checked {
+  background: var(--color-primary);
+}
+
+.toggle__input:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 0.6rem;
+  height: 0.6rem;
+  background: ivory;
+}
+
+/* ============================================================= right panel */
+
+.panel {
+  /* Spans the middle and bottom rows rather than the middle alone — confined to
+     one row, a full controls list or leaderboard gets visibly clipped. The sound
+     toggle moves to the top-right in menus (see .ui__sound--menu) precisely so
+     this column is free all the way down. */
+  grid-column: 2;
+  grid-row: 2 / -1;
+  align-self: center;
+  justify-self: end;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(34rem, 40vw);
+  max-height: 100%;
+  padding: var(--space-4);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  animation: rise 0.35s ease-out both;
+}
+
+.panel__title {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: 700;
+}
+
+/* Scrolls rather than overflowing — a full leaderboard is taller than a short
+   viewport. */
+.panel__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.panel__note {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--color-ink-soft);
+}
+
+/* Shared row shape for the leaderboard, controls and credits lists. */
+.board,
+.keys,
+.credits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-body);
+}
+
+.board__row,
+.keys__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.board__rank {
+  flex: none;
+  width: 1.75rem;
+  font-weight: 700;
+  color: var(--color-ink-soft);
+}
+
+.board__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board__score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.keys__key {
+  flex: none;
+  min-width: 5.5rem;
+  padding: var(--space-1) var(--space-2);
+  font-family: inherit;
+  font-size: 0.9em;
+  font-weight: 700;
+  text-align: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+}
+
+.credits__item {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--color-ink-soft);
+  line-height: 1.5;
+}
+
+.credits__item:last-child {
+  border-bottom: 0;
+}
+
+.credits a {
   color: var(--color-primary);
   text-decoration: underline;
-  transition: color 0.15s ease-in-out;
 }
 
-.list_item a:hover {
+.credits a:hover {
   color: var(--color-secondary);
 }
 
-.score {
-  position: absolute;
-  top: 0;
-  left: 0;
-  padding: 3rem;
-  font-size: 3rem;
-  color: var(--color-primary);
+/* ======================================================================= hud */
+
+.ui__sound {
+  grid-area: bottom-right;
+  align-self: end;
+  justify-self: end;
 }
-.subtitle {
-  padding: 0rem 2rem;
-  color: var(--color-primary);
-  font-size: 2rem;
-  pointer-events: auto;
-  transition: 0.15s ease-in-out all;
-  text-align: center;
+
+/* In menus the top-right cell is empty (the HUD timer only exists while playing),
+   so the toggle moves up there and hands the whole right column to the panel. */
+.ui__sound--menu {
+  grid-area: top-right;
+  align-self: start;
+}
+
+.hud {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  text-shadow: 0 2px 14px hsla(0, 0%, 100%, 0.7);
+}
+
+.hud--top-left {
+  grid-area: top-left;
+  align-items: flex-start;
+}
+
+.hud--top-right {
+  grid-area: top-right;
+  align-items: flex-end;
+  text-align: right;
+}
+
+/* Stall sits in normal flow above the airspeed rather than being positioned with
+   magic offsets tuned against the airspeed block's padding. */
+.hud--bottom-left {
+  grid-area: bottom-left;
+  align-self: end;
+  align-items: flex-start;
+}
+
+.hud__label {
+  font-size: var(--fs-hud-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.hud__value {
+  font-size: var(--fs-hud);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Required: without tabular figures the per-frame readouts jitter as glyph
+   widths change. */
+.hud__value--num {
+  font-variant-numeric: tabular-nums;
+}
+
+.airspeed {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.airspeed__unit {
+  font-size: var(--fs-hud-label);
+  opacity: 0.6;
+}
+
+/* Toggled by the render loop via the is_stalling class. The animation must stay
+   on .is_stalling and never on .stall, or the warning can't be dismissed. */
+.stall {
+  font-size: var(--fs-title);
+  font-weight: 700;
+  color: var(--color-danger);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.stall.is_stalling {
+  opacity: 1;
+  animation: pulse 0.6s infinite;
 }
 
 .warning {
-  position: absolute;
-  top: 15%;
-  left: 50%;
-  transform: translateX(-50%);
+  grid-area: middle;
+  align-self: start;
+  justify-self: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-1);
+  color: var(--color-danger);
   text-align: center;
-  color: crimson;
-  animation: warning_pulse 0.8s ease-in-out infinite;
-}
-.warning_text {
-  font-size: 3rem;
-  font-weight: bold;
-  white-space: nowrap;
-}
-.warning_countdown {
-  font-size: 2rem;
+  animation: pulse 0.8s infinite;
 }
 
-@keyframes warning_pulse {
+.warning__text {
+  font-size: var(--fs-title);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.warning__countdown {
+  font-size: var(--fs-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================================================================== modals */
+
+/* Spans the whole grid so pause/crash/finish centre on the viewport rather than
+   inside a single region. */
+.modal {
+  grid-area: 1 / 1 / -1 / -1;
+  display: grid;
+  place-items: center;
+  margin: calc(var(--edge) * -1);
+}
+
+.modal__scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    hsla(0, 0%, 0%, 0.4) 0%,
+    hsla(0, 0%, 0%, 0.72) 100%
+  );
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: fade 0.35s ease-out both;
+  /* Never blocks the buttons layered over it. */
+  pointer-events: none;
+}
+
+.modal__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(32rem, 90vw);
+  padding: var(--space-5);
+  text-align: center;
+  color: ivory;
+  animation: rise 0.4s ease-out both;
+}
+
+.modal__title {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 2px 16px hsla(0, 0%, 0%, 0.9);
+}
+
+.modal__stat {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.modal__caption {
+  margin: 0;
+  font-size: var(--fs-hud-label);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.modal__note {
+  margin: 0;
+  font-size: var(--fs-body);
+  opacity: 0.75;
+}
+
+.modal__note--error {
+  color: #ff8b82;
+  opacity: 1;
+}
+
+.modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* On the dark scrim the buttons need the inverse treatment. */
+.modal .btn {
+  color: ivory;
+  background: hsla(0, 0%, 0%, 0.45);
+  border-color: ivory;
+}
+
+.modal .btn:hover {
+  color: var(--color-primary);
+  background: ivory;
+}
+
+.modal .btn--primary {
+  color: var(--color-primary);
+  background: ivory;
+}
+
+.modal .btn--primary:hover {
+  background: hsla(0, 0%, 100%, 0.8);
+}
+
+/* =================================================================== loading */
+
+/* Deliberately opaque — it covers the HUD too while the world streams in. */
+.loading {
+  grid-area: 1 / 1 / -1 / -1;
+  margin: calc(var(--edge) * -1);
+  display: grid;
+  place-items: center;
+  background: ivory;
+}
+
+.loading__text {
+  font-size: var(--fs-title);
+  animation: pulse 1.2s infinite;
+}
+
+/* ================================================================ animations */
+
+@keyframes pulse {
   50% {
     opacity: 0.35;
   }
 }
 
-.loading {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: ivory;
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
 }
-.loading_text {
-  font-size: 3rem;
-  color: var(--color-primary);
-  animation: warning_pulse 1.2s ease-in-out infinite;
+
+/* Note: unlike the old crash_overlay_in, this doesn't re-declare a centring
+   transform, so it can't drift out of sync with the layout rules. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+/* =============================================================== responsive */
+
+@media (max-width: 768px) {
+  /* Keep two columns so the HUD corners stay corners — collapsing to one column
+     would stack the score and timer in the same cell. Only the middle row goes
+     full width, which is what the panel needs. */
+  .ui {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "top-left     top-right"
+      "middle       middle"
+      "bottom-left  bottom-right";
+    gap: var(--space-2);
+  }
+
+  /* The panel becomes a sheet filling the middle row rather than a right-hand
+     column, since there is no room beside the plane at this width. */
+  .panel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-self: stretch;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .ui__lower {
+    max-width: none;
+  }
+
+  .nav {
+    width: 100%;
+  }
+
+  .nav .btn {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .modal__card,
+  .modal__scrim {
+    animation: none;
+  }
+
+  .stall.is_stalling,
+  .warning,
+  .loading__text {
+    animation: none;
+  }
 }

@@ -1,9 +1,18 @@
 // flightControls.js
-import useGame from "./stores/useGame";
+//
+// Arcade flight-dynamics model. Velocity is a real vector that is NOT locked to the
+// nose — lift is the only thing that pulls it back in line, which is what produces
+// momentum, energy management (dive to gain speed, climb to bleed it) and stall.
+//
+// The basis is x=right, y=up, z=back, so the nose points along -z.
+
+import { Vector3 } from "three";
 
 function easeOutQuad(x) {
   return 1 - (1 - x) * (1 - x);
 }
+
+const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
 export let controls = {};
 
@@ -13,47 +22,221 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   controls[e.key.toLowerCase()] = false;
 });
+// Without this, alt-tabbing while holding a key leaves it stuck down forever —
+// keyup fires on the other window. Momentum makes a stuck turbo especially nasty.
+window.addEventListener("blur", () => {
+  controls = {};
+});
 
-export let SPEED = 2.5;
-export let TURN_SPEED = 2.5;
+// ---- gravity ----
+// Deliberately NOT Rapier's 9.81 from <Physics> in Experience.jsx — the two are
+// unrelated. Nothing in the scene falls under Rapier gravity (rings are
+// gravityScale={0}, the plane's collider has no RigidBody parent), so this is purely
+// a flight-model number and is free to be whatever feels right. Do not "harmonise" them.
+//
+// It's high on purpose: it puts turbo thrust-to-weight at 0.98, just under 1, so
+// vertical climb is impossible and gravity is actually felt. Lowering it pushes T/W
+// over 1 and gravity stops mattering at all.
+const G = 22.0;
 
-let jawVelocity = 0;
+// ---- lift ----
+const K_L = 0.44; // a_lift = K_L * v^2 * CL(alpha)
+const A_STALL = 0.35; // rad (20.1 deg) — end of the linear CL range
+const A_FADE = 0.5; // rad — post-stall decay width
+const CL_FLOOR = 0.45; // fraction of CL_MAX kept in deep stall, so recovery always works
+const K_Y = 0.22; // side-force (vertical fin)
+
+// ---- drag ----
+const K_D0 = 0.0133; // parasitic
+const K_I = 0.17; // induced (x CL^2)
+const K_SEP = 0.4; // post-stall flow separation
+const K_BETA = 0.3; // sideslip
+
+// ---- thrust ----
+const T0 = 9.0; // u/s^2 — pins level cruise at 25 u/s
+const T_TURBO = 21.5; // u/s^2 at turbo=1 — pins top speed at 40 u/s, T/W = 0.98
+const TURBO_INC = 3.75; // turbo build per second while shift held
+const TURBO_DECAY = 2.5; // per second
+
+// ---- attitude ----
+// Sustained angular rates. The old model's MAX_VELOCITY clamp was dead code: the rate
+// was a fixed point of `w *= exp(-damping*dt); w += accel*dt`, converging to
+// ACCEL*TURN_SPEED/DAMPING ~= 0.81 rad/s, and never reached the 7.5 clamp. These are
+// explicit targets instead — framerate-independent, and faster than what we had.
+const W_PITCH = 1.5; // rad/s
+const W_YAW = 1.0;
+const W_ROLL = 2.4; // roll should be the quickest axis
+const RATE_TAU = 6.5; // rate-response sharpness (keeps the old ~0.15s feel)
+
+// ---- camera ----
+const CAMERA_FOV_BASE = 45;
+const CAMERA_FOV_TURBO_ADD = 12; // instant punch, from the turbo accumulator
+const CAMERA_FOV_SPEED_ADD = 13; // energy gauge, from actual airspeed
+const CAMERA_FOV_SMOOTHNESS = 8.0;
+
+// ---- spawn / integration ----
+export const SPAWN_POSITION = [0, 3, 7];
+const V_SPAWN = 25.0; // spawn at cruise: matches the old game's instant-25 feel and
+const A_TRIM = 0.0799; // rad (4.58 deg) — trimmed so level flight needs no input.
+// Spawning at rest instead would deep-stall on frame 1.
+const V_AERO_MIN = 1.0; // below this, airflow angles are meaningless
+const MAX_DELTA = 1 / 30; // never integrate more than this in one frame
+const MAX_STEP = 1 / 60; // ...and never in steps bigger than this
+
+let rollVelocity = 0;
 let pitchVelocity = 0;
 let yawVelocity = 0;
 export let turbo = 0;
 
-// ---- continuous-time constants (per-second units) ----
-const MAX_VELOCITY = 3.0; // radians per second (max angular velocity)
-const ACCEL = 2.0; // radians per second^2 (angular accel)
-const TURBO_INC = 1.5; // turbo build per second while shift held
-const PLANE_SPEED = 10.0; // units per second (forward base speed)
-const TURBO_SPEED = 6.0; // additional speed at full turbo (units/sec)
+// Mutable, read per-frame by the HUD via addEffect (same pattern as worldBounds.js's
+// boundsState) so airspeed/stall never trigger a React re-render.
+export const flightState = {
+  speed: V_SPAWN,
+  stalling: false,
+  // Mirrors the module-scope `turbo` accumulator. Exported here rather than through
+  // zustand because the juice that consumes it (engine pitch, smoke rate, camera
+  // shake, post-processing) all runs per frame and must not re-render React.
+  turbo: 0,
+};
 
-// damping constants (use exponential decay: vel *= exp(-damping * delta))
-const JAW_DAMPING = 6.0; // per second
-const PITCH_YAW_DAMPING = 6.5; // per second
-
-// Camera FOV smoothing & limits
-const CAMERA_FOV_BASE = 45;
-const CAMERA_FOV_MAX_ADD = 25; // how many degrees FOV can increase at full turbo
-const CAMERA_FOV_SMOOTHNESS = 8.0; // larger = faster interpolation
-
-export const SPAWN_POSITION = [0, 3, 7];
+/** Cruise speed, and roughly the turbo-pinned ceiling — the range juice maps over. */
+export const SPEED_RANGE = { min: V_SPAWN, max: 40 };
 
 /**
- * Returns the plane to spawn with zero velocity and turbo.
- * The axes, velocities and planePosition all live at module scope and survive
- * unmount, so a new run has to reset them explicitly.
+ * Lift coefficient. Linear up to A_STALL, then a smoothstep decay to CL_FLOOR.
+ * CL never reaches zero and strictly decreases past the stall, so nose-down always
+ * lowers alpha, which always raises CL — recovery is monotone and guaranteed.
  */
-export function resetFlight(x, y, z, planePosition) {
-  jawVelocity = 0;
+function CL(a) {
+  const s = Math.sign(a) || 1;
+  const m = Math.abs(a);
+  if (m <= A_STALL) return a;
+  const t = Math.min((m - A_STALL) / A_FADE, 1);
+  const drop = t * t * (3 - 2 * t); // smoothstep
+  return s * A_STALL * (1 - (1 - CL_FLOOR) * drop);
+}
+
+/**
+ * Returns the plane to a trimmed, cruising spawn state.
+ * The basis vectors, velocities, turbo and planePosition all live at module scope and
+ * survive unmount, so a new run has to reset them explicitly.
+ */
+export function resetFlight(x, y, z, planePosition, velocity) {
+  rollVelocity = 0;
   pitchVelocity = 0;
   yawVelocity = 0;
   turbo = 0;
+
   x.set(1, 0, 0);
   y.set(0, 1, 0);
   z.set(0, 0, 1);
+  // Pitch the nose up to the trim angle so lift balances weight immediately.
+  y.applyAxisAngle(x, A_TRIM);
+  z.applyAxisAngle(x, A_TRIM);
+
+  velocity.set(0, 0, -V_SPAWN); // level, along -z, already at cruise
   planePosition.set(...SPAWN_POSITION);
+
+  flightState.speed = V_SPAWN;
+  flightState.stalling = false;
+  flightState.turbo = 0;
+}
+
+// Scratch vectors — reused every substep to keep this allocation-free.
+const _fwd = new Vector3();
+const _vHat = new Vector3();
+const _liftDir = new Vector3();
+const _sideDir = new Vector3();
+const _accel = new Vector3();
+const _tmp = new Vector3();
+
+function integrate(x, y, z, planePosition, velocity, dt) {
+  // 1. Attitude. Kinematic and independent of aero — rotate the basis toward the
+  //    commanded rates. Done before the aero read so control feels a frame sharper.
+  const k = 1 - Math.exp(-RATE_TAU * dt);
+
+  let rollInput = 0;
+  if (controls["a"] || controls["q"]) rollInput += 1;
+  if (controls["d"]) rollInput -= 1;
+
+  let pitchInput = 0;
+  if (controls["w"] || controls["z"] || controls["arrowup"]) pitchInput -= 1;
+  if (controls["s"] || controls["arrowdown"]) pitchInput += 1;
+
+  let yawInput = 0;
+  if (controls["arrowleft"]) yawInput += 1;
+  if (controls["arrowright"]) yawInput -= 1;
+
+  rollVelocity += (rollInput * W_ROLL - rollVelocity) * k;
+  pitchVelocity += (pitchInput * W_PITCH - pitchVelocity) * k;
+  yawVelocity += (yawInput * W_YAW - yawVelocity) * k;
+
+  x.applyAxisAngle(z, rollVelocity * dt);
+  y.applyAxisAngle(z, rollVelocity * dt);
+
+  y.applyAxisAngle(x, pitchVelocity * dt);
+  z.applyAxisAngle(x, pitchVelocity * dt);
+
+  x.applyAxisAngle(y, yawVelocity * dt);
+  z.applyAxisAngle(y, yawVelocity * dt);
+
+  x.normalize();
+  y.normalize();
+  z.normalize();
+
+  // Turbo accumulator.
+  if (controls.shift) turbo += TURBO_INC * dt;
+  else turbo *= Math.exp(-TURBO_DECAY * dt);
+  turbo = clamp(turbo, 0, 1);
+
+  // 2. Forces.
+  _fwd.copy(z).multiplyScalar(-1); // nose is -z
+  _accel.set(0, -G, 0);
+  _accel.addScaledVector(_fwd, T0 + (T_TURBO - T0) * turbo);
+
+  const v = velocity.length();
+  let stalling = false;
+
+  if (v >= V_AERO_MIN) {
+    _vHat.copy(velocity).divideScalar(v);
+
+    const vFwd = velocity.dot(_fwd);
+    const alpha = Math.atan2(-velocity.dot(y), vFwd); // + = nose above flight path
+    const beta = Math.atan2(velocity.dot(x), vFwd);
+
+    // x cross vHat degenerates only at beta = +/-90deg (pure sideways flight).
+    // Gram-Schmidt on y would instead degenerate at alpha = +/-90deg, which happens in
+    // every deep stall. three's normalize() is divideScalar(length() || 1), so the
+    // degenerate case yields a zero vector and silently drops the force — correct.
+    _liftDir.copy(x).cross(_vHat).normalize();
+    _sideDir.copy(y).cross(_vHat).normalize();
+
+    const clAlpha = CL(alpha);
+    const v2 = v * v;
+
+    _accel.addScaledVector(_liftDir, K_L * v2 * clAlpha);
+    _accel.addScaledVector(_sideDir, K_Y * v2 * CL(beta));
+
+    const sep = Math.max(0, Math.abs(alpha) - A_STALL);
+    const cd =
+      K_D0 +
+      K_I * clAlpha * clAlpha +
+      K_SEP * Math.sin(sep) * Math.sin(sep) +
+      K_BETA * Math.sin(beta) * Math.sin(beta);
+
+    _accel.addScaledVector(_vHat, -cd * v2);
+
+    stalling = Math.abs(alpha) > A_STALL;
+  }
+
+  // 3. Symplectic Euler: step velocity first, then use the NEW velocity for position.
+  //    The naive order pumps energy into the lift oscillator.
+  velocity.addScaledVector(_accel, dt);
+  planePosition.addScaledVector(velocity, dt);
+
+  flightState.speed = velocity.length();
+  flightState.stalling = stalling;
+  flightState.turbo = turbo;
 }
 
 export function updatePlaneAxis(
@@ -61,90 +244,35 @@ export function updatePlaneAxis(
   y,
   z,
   planePosition,
+  velocity,
   camera,
-  reset,
   delta = 1 / 60
 ) {
-  if (reset) {
-    console.log("reset");
+  if (controls["r"]) {
+    resetFlight(x, y, z, planePosition, velocity);
+    return;
   }
 
-  // decay velocities smoothly (continuous-time)
-  const jawDecay = Math.exp(-JAW_DAMPING * delta);
-  const pitchYawDecay = Math.exp(-PITCH_YAW_DAMPING * delta);
-
-  jawVelocity *= jawDecay;
-  pitchVelocity *= pitchYawDecay;
-  yawVelocity *= pitchYawDecay;
-
-  // clamp according to max, scaled by TURN_SPEED
-  const maxVel = MAX_VELOCITY * TURN_SPEED;
-  if (Math.abs(jawVelocity) > maxVel)
-    jawVelocity = Math.sign(jawVelocity) * maxVel;
-  if (Math.abs(pitchVelocity) > maxVel)
-    pitchVelocity = Math.sign(pitchVelocity) * maxVel;
-  if (Math.abs(yawVelocity) > maxVel)
-    yawVelocity = Math.sign(yawVelocity) * maxVel;
-
-  // Inputs: acceleration scaled by delta and TURN_SPEED (for responsiveness)
-  const accelThisFrame = ACCEL * delta * TURN_SPEED;
-  if (controls["a"] || controls["q"]) {
-    jawVelocity += accelThisFrame;
-  }
-  if (controls["d"]) {
-    jawVelocity -= accelThisFrame;
-  }
-  if (controls["w"] || controls["z"] || controls["arrowup"]) {
-    pitchVelocity -= accelThisFrame;
-  }
-  if (controls["s"] || controls["arrowdown"]) {
-    pitchVelocity += accelThisFrame;
-  }
-  if (controls["arrowleft"]) {
-    yawVelocity += accelThisFrame;
-  }
-  if (controls["arrowright"]) {
-    yawVelocity -= accelThisFrame;
+  // Lift is a stiff system (tau = 1/(K_L*v), ~0.04s in a turbo dive) so explicit Euler
+  // diverges at large dt — and useFrame's delta spikes to whole seconds on tab restore.
+  // Clamping alone isn't enough; substep. The old kinematic model had no such hazard.
+  const d = Math.min(delta, MAX_DELTA);
+  const steps = Math.ceil(d / MAX_STEP);
+  const dt = d / steps;
+  for (let i = 0; i < steps; i++) {
+    integrate(x, y, z, planePosition, velocity, dt);
   }
 
-  if (controls["r"] || reset) {
-    resetFlight(x, y, z, planePosition);
-  }
+  // FOV: the turbo term gives the instant punch, the speed term makes it an energy
+  // gauge so a dive widens it too.
+  _tmp.copy(velocity);
+  const speedFactor = clamp((_tmp.length() - V_SPAWN) / V_SPAWN, 0, 1);
+  const targetFov =
+    CAMERA_FOV_BASE +
+    easeOutQuad(turbo) * CAMERA_FOV_TURBO_ADD +
+    speedFactor * CAMERA_FOV_SPEED_ADD;
 
-  // apply rotations using velocities (radians/sec) scaled by delta
-  x.applyAxisAngle(z, jawVelocity * delta);
-  y.applyAxisAngle(z, jawVelocity * delta);
-
-  y.applyAxisAngle(x, pitchVelocity * delta);
-  z.applyAxisAngle(x, pitchVelocity * delta);
-
-  x.applyAxisAngle(y, yawVelocity * delta);
-  z.applyAxisAngle(y, yawVelocity * delta);
-
-  x.normalize();
-  y.normalize();
-  z.normalize();
-
-  // turbo accumulation / decay in continuous time
-  if (controls.shift) {
-    turbo += TURBO_INC * delta * SPEED;
-  } else {
-    // exponential decay toward zero when not holding shift
-    turbo *= Math.exp(-2.5 * delta);
-  }
-  turbo = Math.min(Math.max(turbo, 0), 1);
-
-  // turbo speed in units/sec scaled by SPEED
-  let turboSpeedPerSec = TURBO_SPEED * turbo * SPEED;
-
-  // camera FOV: smooth interpolation to target to avoid wild jumps
-  const targetFov = CAMERA_FOV_BASE + easeOutQuad(turbo) * CAMERA_FOV_MAX_ADD;
-  // smooth factor based on delta
   const lerpFactor = 1 - Math.exp(-CAMERA_FOV_SMOOTHNESS * delta);
   camera.fov = camera.fov + (targetFov - camera.fov) * lerpFactor;
   camera.updateProjectionMatrix();
-
-  // move plane forward (per-second plane speed scaled by SPEED) and apply delta
-  const forwardSpeed = PLANE_SPEED * SPEED + turboSpeedPerSec;
-  planePosition.add(z.clone().multiplyScalar(-forwardSpeed * delta));
 }

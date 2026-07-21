@@ -38,6 +38,16 @@ export default {
     {
         outDir: '../dist', // Output in the dist/ folder
         emptyOutDir: true, // Empty the folder first
-        sourcemap: true // Add sourcemap
+        sourcemap: true, // Add sourcemap
+        rollupOptions:
+        {
+            output:
+            {
+                // Split Firebase out of the main bundle. The three.js/rapier payload
+                // is already large enough to trip Vite's chunk-size warning, and the
+                // leaderboard SDK is only needed on two screens.
+                manualChunks: { firebase: ['firebase/app', 'firebase/firestore'] }
+            }
+        }
     },
 }

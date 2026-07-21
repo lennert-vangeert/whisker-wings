@@ -1,14 +1,20 @@
 {
-  "name": "XR-Physics",
+  "name": "Whisker Wings",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build"
+    "dev": "./scripts/dev.sh",
+    "vite": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "emulators": "firebase emulators:start --only firestore --project demo-whisker-wings",
+    "seed": "node scripts/seed.mjs",
+    "deploy:firestore": "firebase deploy --only firestore:rules"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "4.3",
+    "firebase-tools": "^13.35.1",
     "vite": "^5.3.3",
     "vite-plugin-restart": "^0.4.1"
   },
@@ -17,6 +23,7 @@
     "@react-three/fiber": "^8.16.8",
     "@react-three/postprocessing": "^2.16.3",
     "@react-three/rapier": "1.4",
+    "firebase": "^11.10.0",
     "gsap": "^3.12.5",
     "leva": "^0.9.34",
     "r3f-perf": "^7.2.1",

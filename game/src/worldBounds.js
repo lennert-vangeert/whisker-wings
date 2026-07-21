@@ -22,20 +22,35 @@ export const boundsState = {
   remaining: GRACE_SECONDS,
 };
 
-const clampAxis = (value, min, max) => Math.min(Math.max(value, min), max);
-
 /**
- * Clamps `position` into BOUNDS in place.
- * Returns true if it had to move the plane, i.e. the plane is against the boundary.
+ * Clamps `position` into BOUNDS in place, and kills the velocity component pushing
+ * into the wall.
+ *
+ * Only the *outward* component is zeroed, so the plane slides along the boundary and
+ * can still fly away from it. Clamping position alone would pin the plane while its
+ * velocity kept pointing into the wall, and next frame's aero would then see a
+ * velocity that contradicts the position.
+ *
+ * Side effect worth keeping: the zeroed component makes velocity diverge from the
+ * nose, which spikes the angle of attack and therefore drag — so a wall scrape is
+ * something you feel. No restitution; a bounce would be jarring.
+ *
+ * Returns true if the plane is against the boundary.
  */
-export function clampToBounds(position) {
-  const x = clampAxis(position.x, BOUNDS.min.x, BOUNDS.max.x);
-  const y = clampAxis(position.y, BOUNDS.min.y, BOUNDS.max.y);
-  const z = clampAxis(position.z, BOUNDS.min.z, BOUNDS.max.z);
+export function clampToBounds(position, velocity) {
+  let touching = false;
 
-  const touching = x !== position.x || y !== position.y || z !== position.z;
-
-  position.set(x, y, z);
+  for (const axis of ["x", "y", "z"]) {
+    if (position[axis] < BOUNDS.min[axis]) {
+      position[axis] = BOUNDS.min[axis];
+      if (velocity && velocity[axis] < 0) velocity[axis] = 0;
+      touching = true;
+    } else if (position[axis] > BOUNDS.max[axis]) {
+      position[axis] = BOUNDS.max[axis];
+      if (velocity && velocity[axis] > 0) velocity[axis] = 0;
+      touching = true;
+    }
+  }
 
   return touching;
 }
